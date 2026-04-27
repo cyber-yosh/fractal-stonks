@@ -261,10 +261,18 @@
     </div>
 
     <div class="control-group">
-      <label>Grid scales</label>
+      <label>Number of box sizes to test</label>
       <div class="slider-row">
-        <input type="range" id="num-grids" min="4" max="10" value="7" step="1">
-        <span class="slider-value" id="num-grids-value">7</span>
+        <input type="range" id="num-grids" min="4" max="12" value="8" step="1">
+        <span class="slider-value" id="num-grids-value">8</span>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <label>Live box highlighting</label>
+      <div class="toggle-row">
+        <button class="toggle-btn" data-highlight="off">Off</button>
+        <button class="toggle-btn active" data-highlight="on">On</button>
       </div>
     </div>
 
@@ -290,12 +298,12 @@
         <div class="stat-value" id="stat-count">—</div>
       </div>
       <div>
-        <div class="stat-label">Current grid ε</div>
-        <div class="stat-value accent" id="stat-eps">—</div>
+        <div class="stat-label">Box-counting D</div>
+        <div class="stat-value" id="stat-d">—</div>
       </div>
       <div>
-        <div class="stat-label">Computed D</div>
-        <div class="stat-value" id="stat-d">—</div>
+        <div class="stat-label">R/S analysis D</div>
+        <div class="stat-value" id="stat-rs">—</div>
       </div>
     </div>
 
@@ -331,8 +339,9 @@ const state = {
   dates: [],
   ticker: '',
   mode: 'returns',
+  highlight: 'on',
   gridSizes: [],
-  numGrids: 7,
+  numGrids: 8,
   speed: 700,
   animTimeoutIds: [],
   countsCollected: [],  // { gridSize, eps, count, logEps, logN }
@@ -344,13 +353,22 @@ const $ = (id) => document.getElementById(id);
 // Set today's date as default end
 $('end-date').value = new Date().toISOString().split('T')[0];
 
-// Toggle buttons
-document.querySelectorAll('.toggle-btn').forEach(btn => {
+// Mode toggle (raw vs log-returns) - scoped to data-mode buttons only
+document.querySelectorAll('.toggle-btn[data-mode]').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.toggle-btn[data-mode]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     state.mode = btn.dataset.mode;
     if (state.prices.length) runAnalysis();
+  });
+});
+
+// Highlight toggle - changes whether boxes light up live during counting
+document.querySelectorAll('.toggle-btn[data-highlight]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.toggle-btn[data-highlight]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.highlight = btn.dataset.highlight;
   });
 });
 
@@ -436,7 +454,9 @@ function countBoxes(points, nBoxes) {
   const hit = new Set();
   for (let i = 0; i < points.length - 1; i++) {
     const p0 = points[i], p1 = points[i + 1];
-    const steps = nBoxes * 4;
+    const dx = Math.abs(p1.x - p0.x) * nBoxes;
+    const dy = Math.abs(p1.y - p0.y) * nBoxes;
+    const steps = Math.max(2, Math.ceil(Math.max(dx, dy) * 2));
     for (let s = 0; s <= steps; s++) {
       const f = s / steps;
       const x = p0.x + f * (p1.x - p0.x);
@@ -449,12 +469,45 @@ function countBoxes(points, nBoxes) {
   return hit;
 }
 
+// Returns array of "boxes hit at each segment index" so we can animate the discovery
+function countBoxesByStep(points, nBoxes) {
+  const seen = new Set();
+  const newBoxesAtStep = [];  // for each segment, which boxes were freshly added
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i], p1 = points[i + 1];
+    const dx = Math.abs(p1.x - p0.x) * nBoxes;
+    const dy = Math.abs(p1.y - p0.y) * nBoxes;
+    const steps = Math.max(2, Math.ceil(Math.max(dx, dy) * 2));
+    const newKeys = [];
+    for (let s = 0; s <= steps; s++) {
+      const f = s / steps;
+      const x = p0.x + f * (p1.x - p0.x);
+      const y = p0.y + f * (p1.y - p0.y);
+      const col = Math.min(Math.floor(x * nBoxes), nBoxes - 1);
+      const row = Math.min(Math.floor(y * nBoxes), nBoxes - 1);
+      const key = col * nBoxes + row;
+      if (!seen.has(key)) {
+        seen.add(key);
+        newKeys.push(key);
+      }
+    }
+    newBoxesAtStep.push(newKeys);
+  }
+  return { totalHit: seen, newBoxesAtStep };
+}
+
 function computeGridSizes(num) {
-  // logarithmically spaced from 4 to 64
+  // Logarithmically spaced from 8 to 512.
+  // We need fine grids to properly resolve daily zigzags - using only
+  // coarse grids (like 4-64) misses the local roughness of price paths
+  // and gives artificially low D values.
   const sizes = [];
+  const minGrid = 8;
+  const maxGrid = 512;
+  const ratio = maxGrid / minGrid;
   for (let i = 0; i < num; i++) {
     const t = i / (num - 1);
-    const v = Math.round(4 * Math.pow(16, t));
+    const v = Math.round(minGrid * Math.pow(ratio, t));
     if (!sizes.includes(v)) sizes.push(v);
   }
   return sizes;
@@ -471,8 +524,71 @@ function fitLine(points) {
   return { slope, intercept };
 }
 
+// ============= R/S ANALYSIS =============
+// Computes Hurst exponent via rescaled range, then derives D = 2 - H.
+// Operates on log-returns since R/S is meant for stationary series.
+function rsAnalysis(returns) {
+  if (returns.length < 50) return null;
+
+  // Window sizes - logarithmically spaced
+  const sizes = [];
+  const minN = 8;
+  const maxN = Math.floor(returns.length / 4);
+  let s = minN;
+  while (s <= maxN) {
+    sizes.push(s);
+    s = Math.round(s * 1.5);
+  }
+  if (sizes[sizes.length - 1] !== maxN) sizes.push(maxN);
+
+  const points = [];
+
+  for (const n of sizes) {
+    const numWindows = Math.floor(returns.length / n);
+    if (numWindows < 1) continue;
+
+    const rsValues = [];
+    for (let w = 0; w < numWindows; w++) {
+      const chunk = returns.slice(w * n, (w + 1) * n);
+
+      // Mean of chunk
+      const mean = chunk.reduce((a, x) => a + x, 0) / n;
+
+      // Cumulative deviations from mean
+      const cumDev = [];
+      let acc = 0;
+      for (const x of chunk) {
+        acc += x - mean;
+        cumDev.push(acc);
+      }
+
+      const R = Math.max(...cumDev) - Math.min(...cumDev);
+      const variance = chunk.reduce((a, x) => a + (x - mean) ** 2, 0) / n;
+      const S = Math.sqrt(variance);
+
+      if (S > 0) rsValues.push(R / S);
+    }
+
+    if (rsValues.length > 0) {
+      const avgRS = rsValues.reduce((a, x) => a + x, 0) / rsValues.length;
+      points.push({ x: Math.log(n), y: Math.log(avgRS) });
+    }
+  }
+
+  if (points.length < 3) return null;
+
+  // Slope of log(R/S) vs log(n) is Hurst exponent H
+  const fit = fitLine(points);
+  const H = fit.slope;
+  const D = 2 - H;
+  return { H, D, points };
+}
+
 // ============= DRAWING =============
-function drawPathCanvas(points, nBoxes, hitSet) {
+// drawPathCanvas now supports an optional `traceUpTo` parameter.
+// If null, draws full path. If a number, only draws path up to that segment index.
+// `newBoxes` is an optional Set of keys that were just discovered (drawn brighter).
+function drawPathCanvas(points, nBoxes, hitSet, traceUpTo = null, newBoxes = null) {
   const canvas = $('path-canvas');
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
@@ -496,49 +612,86 @@ function drawPathCanvas(points, nBoxes, hitSet) {
     const bw = W / nBoxes;
     const bh = H / nBoxes;
 
-    // Hit boxes (orange/pink)
+    // Already-hit boxes (dim pink fill)
     ctx.fillStyle = 'rgba(247, 118, 142, 0.18)';
-    ctx.strokeStyle = 'rgba(247, 118, 142, 0.55)';
-    ctx.lineWidth = 0.5;
+    ctx.strokeStyle = 'rgba(247, 118, 142, 0.45)';
+    ctx.lineWidth = nBoxes > 100 ? 0.3 : 0.5;
     for (const key of hitSet) {
+      if (newBoxes && newBoxes.has(key)) continue;  // skip - drawn separately below
       const col = Math.floor(key / nBoxes);
       const row = key % nBoxes;
       const px = padX + col * bw;
       const py = padY + (nBoxes - 1 - row) * bh;
       ctx.fillRect(px, py, bw, bh);
-      ctx.strokeRect(px, py, bw, bh);
+      if (nBoxes <= 200) ctx.strokeRect(px, py, bw, bh);
     }
 
-    // All grid lines
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.lineWidth = 0.5;
-    for (let c = 0; c <= nBoxes; c++) {
-      ctx.beginPath();
-      ctx.moveTo(padX + c * bw, padY);
-      ctx.lineTo(padX + c * bw, padY + H);
-      ctx.stroke();
+    // Newly-discovered boxes (bright pink/yellow flash)
+    if (newBoxes && newBoxes.size > 0) {
+      ctx.fillStyle = 'rgba(224, 175, 104, 0.55)';   // tokyo night yellow
+      ctx.strokeStyle = 'rgba(224, 175, 104, 0.95)';
+      ctx.lineWidth = nBoxes > 100 ? 0.4 : 0.7;
+      for (const key of newBoxes) {
+        const col = Math.floor(key / nBoxes);
+        const row = key % nBoxes;
+        const px = padX + col * bw;
+        const py = padY + (nBoxes - 1 - row) * bh;
+        ctx.fillRect(px, py, bw, bh);
+        if (nBoxes <= 200) ctx.strokeRect(px, py, bw, bh);
+      }
     }
-    for (let r = 0; r <= nBoxes; r++) {
-      ctx.beginPath();
-      ctx.moveTo(padX, padY + r * bh);
-      ctx.lineTo(padX + W, padY + r * bh);
-      ctx.stroke();
+
+    // Grid lines (only for coarser grids)
+    if (nBoxes <= 80) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      ctx.lineWidth = 0.5;
+      for (let c = 0; c <= nBoxes; c++) {
+        ctx.beginPath();
+        ctx.moveTo(padX + c * bw, padY);
+        ctx.lineTo(padX + c * bw, padY + H);
+        ctx.stroke();
+      }
+      for (let r = 0; r <= nBoxes; r++) {
+        ctx.beginPath();
+        ctx.moveTo(padX, padY + r * bh);
+        ctx.lineTo(padX + W, padY + r * bh);
+        ctx.stroke();
+      }
     }
   }
 
-  // Path
+  // Path - if traceUpTo is set, only draw the first part
+  const upTo = traceUpTo === null ? points.length : Math.min(traceUpTo + 1, points.length);
+
+  // Already-traced part (full brightness)
   ctx.beginPath();
   ctx.strokeStyle = '#7dcfff';
   ctx.lineWidth = 1.5;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
-  points.forEach((p, i) => {
+  for (let i = 0; i < upTo; i++) {
+    const p = points[i];
     const px = padX + p.x * W;
     const py = padY + (1 - p.y) * H;
     if (i === 0) ctx.moveTo(px, py);
     else ctx.lineTo(px, py);
-  });
+  }
   ctx.stroke();
+
+  // Untraced remainder (dim) - only show during tracing
+  if (traceUpTo !== null && upTo < points.length) {
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(125, 207, 255, 0.18)';
+    ctx.lineWidth = 1;
+    for (let i = upTo - 1; i < points.length; i++) {
+      const p = points[i];
+      const px = padX + p.x * W;
+      const py = padY + (1 - p.y) * H;
+      if (i === upTo - 1) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  }
 }
 
 function drawLogLog(collected, finalFit) {
@@ -686,71 +839,155 @@ function runAnalysis() {
 
   $('stat-d').textContent = '—';
   $('stat-d').className = 'stat-value';
-  $('stat-eps').textContent = '—';
-  $('interp-text').textContent = 'Computing... watch the grid shrink as we count boxes at each scale.';
+  $('stat-rs').textContent = '—';
+  $('stat-rs').className = 'stat-value';
+  $('interp-text').textContent = 'Computing... watch boxes light up as the path is traced.';
 
   // Animate through grid sizes
   let stepIdx = 0;
-  function nextStep() {
-    if (stepIdx >= state.gridSizes.length) {
-      // Final fit
-      const logPts = state.countsCollected.map(d => ({
-        x: Math.log(d.gridSize),
-        y: Math.log(d.count)
-      }));
-      const fit = fitLine(logPts);
-      const D = fit.slope;
-      $('stat-d').textContent = D.toFixed(3);
-      // color D based on regime
-      const dEl = $('stat-d');
-      if (D < 1.45) dEl.className = 'stat-value green';
-      else if (D > 1.55) dEl.className = 'stat-value pink';
-      else dEl.className = 'stat-value accent';
 
-      drawLogLog(state.countsCollected, fit);
-      updateInterpretation(D);
-      setStatus(`Done. D = ${D.toFixed(3)}`, 'success');
+  function finalize() {
+    const logPts = state.countsCollected.map(d => ({
+      x: Math.log(d.gridSize),
+      y: Math.log(d.count)
+    }));
+    const fit = fitLine(logPts);
+    const D = fit.slope;
+    $('stat-d').textContent = D.toFixed(3);
+    const dEl = $('stat-d');
+    if (D < 1.45) dEl.className = 'stat-value green';
+    else if (D > 1.55) dEl.className = 'stat-value pink';
+    else dEl.className = 'stat-value accent';
+
+    drawLogLog(state.countsCollected, fit);
+
+    const rs = rsAnalysis(state.logReturns);
+    let rsD = null;
+    if (rs) {
+      rsD = rs.D;
+      $('stat-rs').textContent = rs.D.toFixed(3);
+      const rsEl = $('stat-rs');
+      if (rs.D < 1.45) rsEl.className = 'stat-value green';
+      else if (rs.D > 1.55) rsEl.className = 'stat-value pink';
+      else rsEl.className = 'stat-value accent';
+    } else {
+      $('stat-rs').textContent = 'n/a';
+    }
+
+    updateInterpretation(D, rsD);
+    setStatus(`Done. Box-counting D = ${D.toFixed(3)}${rsD !== null ? ', R/S D = ' + rsD.toFixed(3) : ''}`, 'success');
+  }
+
+  function nextGridSize() {
+    if (stepIdx >= state.gridSizes.length) {
+      finalize();
       return;
     }
 
     const gridSize = state.gridSizes[stepIdx];
-    const hitSet = countBoxes(points, gridSize);
-    const eps = 1 / gridSize;
-    state.countsCollected.push({
-      gridSize,
-      eps,
-      count: hitSet.size,
-      logEps: Math.log(eps),
-      logN: Math.log(hitSet.size)
-    });
 
-    drawPathCanvas(points, gridSize, hitSet);
-    drawLogLog(state.countsCollected, null);
-
-    $('stat-eps').textContent = `1/${gridSize}`;
-
-    stepIdx++;
-    const id = setTimeout(nextStep, state.speed);
-    state.animTimeoutIds.push(id);
+    if (state.highlight === 'on') {
+      // Live trace animation: walk through segments, highlighting newly hit boxes
+      runTraceForGrid(points, gridSize, () => {
+        stepIdx++;
+        const id = setTimeout(nextGridSize, Math.min(state.speed * 0.4, 400));
+        state.animTimeoutIds.push(id);
+      });
+    } else {
+      // Fast: just compute and show
+      const hit = countBoxes(points, gridSize);
+      const eps = 1 / gridSize;
+      state.countsCollected.push({
+        gridSize, eps,
+        count: hit.size,
+        logEps: Math.log(eps),
+        logN: Math.log(hit.size)
+      });
+      drawPathCanvas(points, gridSize, hit);
+      drawLogLog(state.countsCollected, null);
+      stepIdx++;
+      const id = setTimeout(nextGridSize, state.speed);
+      state.animTimeoutIds.push(id);
+    }
   }
-  nextStep();
+
+  // Animates the path being traced, lighting up boxes as they're discovered
+  function runTraceForGrid(points, gridSize, onComplete) {
+    const { totalHit, newBoxesAtStep } = countBoxesByStep(points, gridSize);
+    const eps = 1 / gridSize;
+
+    // Total time for this grid's trace
+    const traceDuration = state.speed * 1.5;
+    const numSegments = newBoxesAtStep.length;
+    // Step animation in chunks so it's not too slow with thousands of points
+    const numFrames = Math.min(numSegments, 60);
+    const segmentsPerFrame = Math.ceil(numSegments / numFrames);
+    const frameDelay = traceDuration / numFrames;
+
+    const seenSoFar = new Set();
+    let frame = 0;
+
+    function nextFrame() {
+      const startSeg = frame * segmentsPerFrame;
+      const endSeg = Math.min(startSeg + segmentsPerFrame, numSegments);
+      const newKeysThisFrame = new Set();
+      for (let s = startSeg; s < endSeg; s++) {
+        for (const k of newBoxesAtStep[s]) {
+          seenSoFar.add(k);
+          newKeysThisFrame.add(k);
+        }
+      }
+
+      drawPathCanvas(points, gridSize, seenSoFar, endSeg, newKeysThisFrame);
+
+      frame++;
+      if (frame < numFrames) {
+        const id = setTimeout(nextFrame, frameDelay);
+        state.animTimeoutIds.push(id);
+      } else {
+        // Trace complete - log the count and move on
+        state.countsCollected.push({
+          gridSize, eps,
+          count: totalHit.size,
+          logEps: Math.log(eps),
+          logN: Math.log(totalHit.size)
+        });
+        drawPathCanvas(points, gridSize, totalHit);  // final clean draw
+        drawLogLog(state.countsCollected, null);
+        onComplete();
+      }
+    }
+
+    nextFrame();
+  }
+
+  nextGridSize();
 }
 
-function updateInterpretation(D) {
+function updateInterpretation(D, rsD) {
   const el = $('interp-text');
-  let text;
-  if (D < 1.45) {
-    text = `D = ${D.toFixed(3)} is below the random walk baseline of 1.5. This suggests ${state.ticker} exhibits trending / persistent behavior — moves tend to continue in the same direction (positive feedback / momentum). The smoother path means fewer reversals and lower geometric roughness.`;
-  } else if (D > 1.55) {
-    text = `D = ${D.toFixed(3)} is above the random walk baseline of 1.5. This suggests ${state.ticker} exhibits anti-persistent / mean-reverting behavior — moves tend to be reversed (negative feedback). The rougher path zigzags more, filling more of the unit square.`;
-  } else {
-    text = `D = ${D.toFixed(3)} is close to the random walk baseline of 1.5. This means ${state.ticker} behaves approximately like a Brownian random walk over this period — moves are roughly independent of each other.`;
+
+  function regime(d) {
+    if (d < 1.45) return 'trending / persistent (momentum)';
+    if (d > 1.55) return 'mean-reverting / anti-persistent (overcorrection)';
+    return 'near random walk baseline';
+  }
+
+  let text = `Box-counting D = ${D.toFixed(3)} → ${regime(D)}.`;
+  if (rsD !== null && rsD !== undefined) {
+    text += ` R/S analysis D = ${rsD.toFixed(3)} → ${regime(rsD)}.`;
+    if (Math.abs(D - rsD) > 0.15) {
+      text += ` The two methods disagree noticeably — this is common because box-counting can be sensitive to outliers and aspect ratio for self-affine series like price charts. R/S analysis is generally more reliable for time series.`;
+    } else {
+      text += ` Both methods agree, giving us confidence in the result.`;
+    }
   }
   el.textContent = text;
 }
 
 // Init: set first toggle button state visually
 document.querySelector('.toggle-btn[data-mode="returns"]').classList.add('active');
+document.querySelector('.toggle-btn[data-highlight="on"]').classList.add('active');
 </script>
 </body>
 </html>
