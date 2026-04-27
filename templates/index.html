@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fractal Dimension of Stock Prices</title>
+<style>
+  :root {
+    --bg: #000000;
+    --panel: #0d0e14;
+    --border: #1f2335;
+    --text: #c0caf5;
+    --muted: #565f89;
+    --accent: #7dcfff;
+    --green: #9ece6a;
+    --pink: #f7768e;
+    --purple: #bb9af7;
+    --yellow: #e0af68;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+  }
+  h1 {
+    font-size: 22px;
+    font-weight: 500;
+    margin: 0 0 4px;
+    color: var(--text);
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 24px;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 20px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  .controls {
+    background: var(--panel);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+    height: fit-content;
+  }
+  .control-group { margin-bottom: 16px; }
+  .control-group label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 6px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  input[type="text"], input[type="date"], select {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--bg);
+    border: 0.5px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+  }
+  input[type="text"]:focus, input[type="date"]:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .toggle-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .toggle-btn {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--bg);
+    border: 0.5px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    transition: all 0.15s;
+  }
+  .toggle-btn.active {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+  .toggle-btn:hover:not(.active) {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent);
+  }
+  .slider-value {
+    min-width: 40px;
+    text-align: right;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  button.primary {
+    width: 100%;
+    padding: 10px;
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    color: var(--bg);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  button.primary:hover { opacity: 0.85; }
+  button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary {
+    width: 100%;
+    padding: 8px;
+    background: var(--bg);
+    border: 0.5px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    margin-top: 8px;
+  }
+  button.secondary:hover { border-color: var(--accent); }
+  .right-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .info-strip {
+    background: var(--panel);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .stat-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+  .stat-value {
+    font-size: 22px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+  }
+  .stat-value.accent { color: var(--accent); }
+  .stat-value.green { color: var(--green); }
+  .stat-value.pink { color: var(--pink); }
+  .chart-row {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr;
+    gap: 16px;
+  }
+  .chart-card {
+    background: var(--panel);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .chart-title {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+  }
+  .status {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 6px;
+    min-height: 16px;
+  }
+  .status.error { color: var(--pink); }
+  .status.success { color: var(--green); }
+  .interp-card {
+    background: var(--panel);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+  .interp-card .label { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+  hr { border: none; border-top: 0.5px solid var(--border); margin: 16px 0; }
+</style>
+</head>
+<body>
+
+<h1>Fractal Dimension of Stock Prices</h1>
+<div class="subtitle">Box-counting dimension D of a price path. D = 1.5 → random walk · D &lt; 1.5 → trending · D &gt; 1.5 → mean-reverting</div>
+
+<div class="layout">
+
+  <!-- LEFT: Controls -->
+  <div class="controls">
+    <div class="control-group">
+      <label>Ticker</label>
+      <input type="text" id="ticker" value="AAPL" placeholder="e.g. AAPL, GME, BTC-USD">
+    </div>
+
+    <div class="control-group">
+      <label>Start date</label>
+      <input type="date" id="start-date" value="2020-01-01">
+    </div>
+
+    <div class="control-group">
+      <label>End date</label>
+      <input type="date" id="end-date">
+    </div>
+
+    <hr>
+
+    <div class="control-group">
+      <label>Data type</label>
+      <div class="toggle-row">
+        <button class="toggle-btn" data-mode="prices">Raw prices</button>
+        <button class="toggle-btn active" data-mode="returns">Log-returns</button>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <label>Animation speed</label>
+      <div class="slider-row">
+        <input type="range" id="speed" min="100" max="1500" value="700" step="50">
+        <span class="slider-value" id="speed-value">700ms</span>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <label>Grid scales</label>
+      <div class="slider-row">
+        <input type="range" id="num-grids" min="4" max="10" value="7" step="1">
+        <span class="slider-value" id="num-grids-value">7</span>
+      </div>
+    </div>
+
+    <hr>
+
+    <button class="primary" id="load-btn">Load & Compute D</button>
+    <button class="secondary" id="replay-btn" disabled>Replay animation</button>
+
+    <div class="status" id="status"></div>
+  </div>
+
+  <!-- RIGHT: Visualization -->
+  <div class="right-panel">
+
+    <!-- Stat strip -->
+    <div class="info-strip">
+      <div>
+        <div class="stat-label">Ticker</div>
+        <div class="stat-value" id="stat-ticker">—</div>
+      </div>
+      <div>
+        <div class="stat-label">Data points</div>
+        <div class="stat-value" id="stat-count">—</div>
+      </div>
+      <div>
+        <div class="stat-label">Current grid ε</div>
+        <div class="stat-value accent" id="stat-eps">—</div>
+      </div>
+      <div>
+        <div class="stat-label">Computed D</div>
+        <div class="stat-value" id="stat-d">—</div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="chart-row">
+
+      <div class="chart-card">
+        <div class="chart-title">Price path with box-counting grid</div>
+        <canvas id="path-canvas" width="800" height="380"></canvas>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">Log-log plot · slope = D</div>
+        <canvas id="loglog-canvas" width="500" height="380"></canvas>
+      </div>
+
+    </div>
+
+    <!-- Interpretation -->
+    <div class="interp-card">
+      <span class="label">Interpretation</span>
+      <div id="interp-text" style="margin-top:6px;">Load a stock above to compute its fractal dimension and see how the box-counting algorithm works.</div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ============= STATE =============
+const state = {
+  prices: [],
+  logReturns: [],
+  dates: [],
+  ticker: '',
+  mode: 'returns',
+  gridSizes: [],
+  numGrids: 7,
+  speed: 700,
+  animTimeoutIds: [],
+  countsCollected: [],  // { gridSize, eps, count, logEps, logN }
+};
+
+// ============= DOM HELPERS =============
+const $ = (id) => document.getElementById(id);
+
+// Set today's date as default end
+$('end-date').value = new Date().toISOString().split('T')[0];
+
+// Toggle buttons
+document.querySelectorAll('.toggle-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.mode = btn.dataset.mode;
+    if (state.prices.length) runAnalysis();
+  });
+});
+
+$('speed').addEventListener('input', (e) => {
+  state.speed = +e.target.value;
+  $('speed-value').textContent = state.speed + 'ms';
+});
+
+$('num-grids').addEventListener('input', (e) => {
+  state.numGrids = +e.target.value;
+  $('num-grids-value').textContent = state.numGrids;
+});
+
+$('replay-btn').addEventListener('click', () => {
+  if (state.prices.length) runAnalysis();
+});
+
+$('load-btn').addEventListener('click', loadStock);
+
+// ============= API CALL =============
+async function loadStock() {
+  const ticker = $('ticker').value.trim().toUpperCase();
+  const start = $('start-date').value;
+  const end = $('end-date').value;
+
+  if (!ticker) {
+    setStatus('Please enter a ticker', 'error');
+    return;
+  }
+
+  setStatus('Loading data from yfinance...', '');
+  $('load-btn').disabled = true;
+
+  try {
+    const res = await fetch(`/api/stock?ticker=${ticker}&start=${start}&end=${end}`);
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.error || 'Failed to load');
+
+    state.prices = data.prices;
+    state.logReturns = data.log_returns;
+    state.dates = data.dates;
+    state.ticker = data.ticker;
+
+    $('stat-ticker').textContent = data.ticker;
+    $('stat-count').textContent = data.count;
+
+    setStatus(`Loaded ${data.count} days of ${data.ticker}`, 'success');
+    $('replay-btn').disabled = false;
+
+    runAnalysis();
+  } catch (err) {
+    setStatus('Error: ' + err.message, 'error');
+  } finally {
+    $('load-btn').disabled = false;
+  }
+}
+
+function setStatus(msg, type = '') {
+  const el = $('status');
+  el.textContent = msg;
+  el.className = 'status' + (type ? ' ' + type : '');
+}
+
+// ============= NORMALIZATION =============
+function getSeries() {
+  return state.mode === 'returns' ? state.logReturns : state.prices;
+}
+
+function normalize(arr) {
+  const mn = Math.min(...arr);
+  const mx = Math.max(...arr);
+  const rng = mx - mn || 1;
+  const n = arr.length;
+  return arr.map((v, i) => ({
+    x: i / (n - 1),
+    y: (v - mn) / rng
+  }));
+}
+
+// ============= BOX COUNTING =============
+function countBoxes(points, nBoxes) {
+  const hit = new Set();
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i], p1 = points[i + 1];
+    const steps = nBoxes * 4;
+    for (let s = 0; s <= steps; s++) {
+      const f = s / steps;
+      const x = p0.x + f * (p1.x - p0.x);
+      const y = p0.y + f * (p1.y - p0.y);
+      const col = Math.min(Math.floor(x * nBoxes), nBoxes - 1);
+      const row = Math.min(Math.floor(y * nBoxes), nBoxes - 1);
+      hit.add(col * nBoxes + row);
+    }
+  }
+  return hit;
+}
+
+function computeGridSizes(num) {
+  // logarithmically spaced from 4 to 64
+  const sizes = [];
+  for (let i = 0; i < num; i++) {
+    const t = i / (num - 1);
+    const v = Math.round(4 * Math.pow(16, t));
+    if (!sizes.includes(v)) sizes.push(v);
+  }
+  return sizes;
+}
+
+function fitLine(points) {
+  const n = points.length;
+  const mx = points.reduce((a, p) => a + p.x, 0) / n;
+  const my = points.reduce((a, p) => a + p.y, 0) / n;
+  const num = points.reduce((a, p) => a + (p.x - mx) * (p.y - my), 0);
+  const den = points.reduce((a, p) => a + (p.x - mx) ** 2, 0);
+  const slope = num / den;
+  const intercept = my - slope * mx;
+  return { slope, intercept };
+}
+
+// ============= DRAWING =============
+function drawPathCanvas(points, nBoxes, hitSet) {
+  const canvas = $('path-canvas');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+
+  const cssW = canvas.clientWidth;
+  const cssH = 380;
+  canvas.width = cssW * dpr;
+  canvas.height = cssH * dpr;
+  canvas.style.height = cssH + 'px';
+  ctx.scale(dpr, dpr);
+
+  ctx.clearRect(0, 0, cssW, cssH);
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  const padX = 8, padY = 8;
+  const W = cssW - 2 * padX;
+  const H = cssH - 2 * padY;
+
+  if (nBoxes && hitSet) {
+    const bw = W / nBoxes;
+    const bh = H / nBoxes;
+
+    // Hit boxes (orange/pink)
+    ctx.fillStyle = 'rgba(247, 118, 142, 0.18)';
+    ctx.strokeStyle = 'rgba(247, 118, 142, 0.55)';
+    ctx.lineWidth = 0.5;
+    for (const key of hitSet) {
+      const col = Math.floor(key / nBoxes);
+      const row = key % nBoxes;
+      const px = padX + col * bw;
+      const py = padY + (nBoxes - 1 - row) * bh;
+      ctx.fillRect(px, py, bw, bh);
+      ctx.strokeRect(px, py, bw, bh);
+    }
+
+    // All grid lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 0.5;
+    for (let c = 0; c <= nBoxes; c++) {
+      ctx.beginPath();
+      ctx.moveTo(padX + c * bw, padY);
+      ctx.lineTo(padX + c * bw, padY + H);
+      ctx.stroke();
+    }
+    for (let r = 0; r <= nBoxes; r++) {
+      ctx.beginPath();
+      ctx.moveTo(padX, padY + r * bh);
+      ctx.lineTo(padX + W, padY + r * bh);
+      ctx.stroke();
+    }
+  }
+
+  // Path
+  ctx.beginPath();
+  ctx.strokeStyle = '#7dcfff';
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  points.forEach((p, i) => {
+    const px = padX + p.x * W;
+    const py = padY + (1 - p.y) * H;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  });
+  ctx.stroke();
+}
+
+function drawLogLog(collected, finalFit) {
+  const canvas = $('loglog-canvas');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+
+  const cssW = canvas.clientWidth;
+  const cssH = 380;
+  canvas.width = cssW * dpr;
+  canvas.height = cssH * dpr;
+  canvas.style.height = cssH + 'px';
+  ctx.scale(dpr, dpr);
+
+  ctx.clearRect(0, 0, cssW, cssH);
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  if (collected.length === 0) {
+    ctx.fillStyle = '#565f89';
+    ctx.font = '12px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Run analysis to populate log-log plot', cssW / 2, cssH / 2);
+    return;
+  }
+
+  const padL = 50, padR = 18, padT = 18, padB = 38;
+  const W = cssW - padL - padR;
+  const H = cssH - padT - padB;
+
+  // x = log(1/eps) = log(nBoxes), y = log(N)
+  const xVals = collected.map(d => Math.log(d.gridSize));
+  const yVals = collected.map(d => Math.log(d.count));
+
+  const xMin = Math.min(...xVals);
+  const xMax = Math.max(...xVals);
+  const yMin = Math.min(...yVals);
+  const yMax = Math.max(...yVals);
+
+  const xPad = (xMax - xMin) * 0.1 || 0.5;
+  const yPad = (yMax - yMin) * 0.1 || 0.5;
+
+  const xLo = xMin - xPad, xHi = xMax + xPad;
+  const yLo = yMin - yPad, yHi = yMax + yPad;
+
+  const toPx = (x, y) => ({
+    x: padL + ((x - xLo) / (xHi - xLo)) * W,
+    y: padT + (1 - (y - yLo) / (yHi - yLo)) * H
+  });
+
+  // Axes
+  ctx.strokeStyle = '#1f2335';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, padT);
+  ctx.lineTo(padL, padT + H);
+  ctx.lineTo(padL + W, padT + H);
+  ctx.stroke();
+
+  // Gridlines
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 0.5;
+  for (let i = 1; i <= 4; i++) {
+    const y = padT + (i / 5) * H;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(padL + W, y);
+    ctx.stroke();
+  }
+
+  // Axis labels
+  ctx.fillStyle = '#565f89';
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('ln(1/ε) = ln(grid resolution)', padL + W / 2, padT + H + 28);
+  ctx.save();
+  ctx.translate(14, padT + H / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('ln N(ε)', 0, 0);
+  ctx.restore();
+
+  // Tick labels
+  ctx.font = '10px -apple-system, sans-serif';
+  ctx.fillStyle = '#565f89';
+  ctx.textAlign = 'right';
+  ctx.fillText(yLo.toFixed(1), padL - 4, padT + H + 4);
+  ctx.fillText(yHi.toFixed(1), padL - 4, padT + 4);
+  ctx.textAlign = 'center';
+  ctx.fillText(xLo.toFixed(1), padL, padT + H + 14);
+  ctx.fillText(xHi.toFixed(1), padL + W, padT + H + 14);
+
+  // Fit line
+  if (finalFit) {
+    const x1 = xLo, x2 = xHi;
+    const y1 = finalFit.intercept + finalFit.slope * x1;
+    const y2 = finalFit.intercept + finalFit.slope * x2;
+    const p1 = toPx(x1, y1);
+    const p2 = toPx(x2, y2);
+    ctx.strokeStyle = '#f7768e';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+
+    // Slope label
+    ctx.fillStyle = '#f7768e';
+    ctx.textAlign = 'left';
+    ctx.font = '12px -apple-system, sans-serif';
+    ctx.fillText(`D = ${finalFit.slope.toFixed(3)}`, padL + 12, padT + 16);
+  }
+
+  // Points
+  collected.forEach((d, i) => {
+    const p = toPx(Math.log(d.gridSize), Math.log(d.count));
+    ctx.fillStyle = '#7dcfff';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  });
+}
+
+// ============= ANALYSIS =============
+function runAnalysis() {
+  // Cancel any running animation
+  state.animTimeoutIds.forEach(id => clearTimeout(id));
+  state.animTimeoutIds = [];
+  state.countsCollected = [];
+
+  const series = getSeries();
+  if (series.length < 10) {
+    setStatus('Not enough data points', 'error');
+    return;
+  }
+
+  const points = normalize(series);
+  state.gridSizes = computeGridSizes(state.numGrids);
+
+  // Static initial draw of path
+  drawPathCanvas(points, null, null);
+  drawLogLog([], null);
+
+  $('stat-d').textContent = '—';
+  $('stat-d').className = 'stat-value';
+  $('stat-eps').textContent = '—';
+  $('interp-text').textContent = 'Computing... watch the grid shrink as we count boxes at each scale.';
+
+  // Animate through grid sizes
+  let stepIdx = 0;
+  function nextStep() {
+    if (stepIdx >= state.gridSizes.length) {
+      // Final fit
+      const logPts = state.countsCollected.map(d => ({
+        x: Math.log(d.gridSize),
+        y: Math.log(d.count)
+      }));
+      const fit = fitLine(logPts);
+      const D = fit.slope;
+      $('stat-d').textContent = D.toFixed(3);
+      // color D based on regime
+      const dEl = $('stat-d');
+      if (D < 1.45) dEl.className = 'stat-value green';
+      else if (D > 1.55) dEl.className = 'stat-value pink';
+      else dEl.className = 'stat-value accent';
+
+      drawLogLog(state.countsCollected, fit);
+      updateInterpretation(D);
+      setStatus(`Done. D = ${D.toFixed(3)}`, 'success');
+      return;
+    }
+
+    const gridSize = state.gridSizes[stepIdx];
+    const hitSet = countBoxes(points, gridSize);
+    const eps = 1 / gridSize;
+    state.countsCollected.push({
+      gridSize,
+      eps,
+      count: hitSet.size,
+      logEps: Math.log(eps),
+      logN: Math.log(hitSet.size)
+    });
+
+    drawPathCanvas(points, gridSize, hitSet);
+    drawLogLog(state.countsCollected, null);
+
+    $('stat-eps').textContent = `1/${gridSize}`;
+
+    stepIdx++;
+    const id = setTimeout(nextStep, state.speed);
+    state.animTimeoutIds.push(id);
+  }
+  nextStep();
+}
+
+function updateInterpretation(D) {
+  const el = $('interp-text');
+  let text;
+  if (D < 1.45) {
+    text = `D = ${D.toFixed(3)} is below the random walk baseline of 1.5. This suggests ${state.ticker} exhibits trending / persistent behavior — moves tend to continue in the same direction (positive feedback / momentum). The smoother path means fewer reversals and lower geometric roughness.`;
+  } else if (D > 1.55) {
+    text = `D = ${D.toFixed(3)} is above the random walk baseline of 1.5. This suggests ${state.ticker} exhibits anti-persistent / mean-reverting behavior — moves tend to be reversed (negative feedback). The rougher path zigzags more, filling more of the unit square.`;
+  } else {
+    text = `D = ${D.toFixed(3)} is close to the random walk baseline of 1.5. This means ${state.ticker} behaves approximately like a Brownian random walk over this period — moves are roughly independent of each other.`;
+  }
+  el.textContent = text;
+}
+
+// Init: set first toggle button state visually
+document.querySelector('.toggle-btn[data-mode="returns"]').classList.add('active');
+</script>
+</body>
+</html>
